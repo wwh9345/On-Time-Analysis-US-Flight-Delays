@@ -1,0 +1,703 @@
+---
+title: "Airline Flight Delay Analysis and Prediction"
+author: "210344150"
+date: "2023-03-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(reshape2)
+library(bit)
+library(dplyr)
+library(tidyr)
+library(leaflet)
+library(igraph)
+library(gridExtra)
+library(e1071)
+library(caret)
+library(tidymodels)
+library(ranger)
+```
+
+```{r}
+setwd("~/My Documents/SIMGE-UOL/ST2195/Official Coursework/Python Files")
+```
+
+```{r}
+df2006 <- read.csv("2006.csv")
+df2007 <- read.csv("2007.csv")
+```
+
+```{r}
+# Check outline of dataframes - No. of rows & columns
+cat(sprintf("2006: %s\n", dim(df2006)))
+cat(sprintf("2007: %s\n", dim(df2007)))
+```
+# Concatenate dataframes
+```{r}
+merged_df <- bind_rows(df2006, df2007)
+```
+# Calculate percentage of null values per column
+```{r}
+null_values_pct <- colMeans(is.na(merged_df)) * 100
+cat("% null values per col: \n")
+cat(sprintf("%s: %s%%\n", names(null_values_pct), null_values_pct))
+```
+# Several variables contain values that cannot be negative, such 'elapsed-time', distance and airtime variables - they can only be positive.
+```{r}
+# Drop these columns as they might not be within our scope of of flight delay analysis
+merged_df <- merged_df %>%
+  select(-CancellationCode, -UniqueCarrier, -TaxiIn, -TaxiOut, -Diverted)
+
+# keep values only if they fall within the selection criteria, then replace missing values with 0.
+merged_df <- merged_df[merged_df$ActualElapsedTime > 0 &
+                           merged_df$CRSElapsedTime > 0 &
+                           merged_df$AirTime > 0 &
+                           merged_df$Distance > 0,]
+# Fill retained null values with 0 to prevent skewing data
+merged_df[is.na(merged_df)] <- 0
+```
+
+```{r}
+# Convert time to 24-hour format
+convert_time <- function(time) {
+  if (time >= 2400) {
+    time <- time - 2400
+  }
+  return(time)
+}
+
+# Extract hour from departure time
+merged_df$DepHour <- (merged_df$DepTime %/% 100) %% 24
+
+# Loop through the hour-time columns
+time_cols <- c("DepTime", "DepHour", "CRSDepTime", "ArrTime", "CRSArrTime")
+for (col in time_cols) {
+  merged_df[[col]] <- sapply(merged_df[[col]], convert_time)
+}
+
+# Check the largest and smallest values in the 'DepTime' and 'ArrTime' columns
+cat("Largest DepTime: ", max(merged_df$DepTime), "\n")
+cat("Largest ArrTime: ", max(merged_df$ArrTime), "\n")
+
+# Display the smallest values in the 'DepTime' and 'ArrTime' columns
+cat("Smallest DepTime: ", min(merged_df$DepTime, na.rm = TRUE), "\n")
+cat("Smallest ArrTime: ", min(merged_df$ArrTime, na.rm = TRUE), "\n")
+```
+
+```{r}
+# Rename DayofMonth column and create Date column
+merged_df <- merged_df %>%
+  rename(Day = DayofMonth)
+merged_df <- merged_df %>%
+  mutate(Date = ymd(paste(Year, Month, Day, sep = "-")))
+
+# Remove any null values that may have arised from the date-time conversion / other processes.
+merged_df <- na.omit(merged_df) 
+# Reorder columns
+new_order <- c(26,1,2,3,4,5,25,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24)
+merged_df <- merged_df[, new_order]
+```
+# Re-check percentage of null values per column after filtering
+```{r}
+null_values_pct <- colMeans(is.na(merged_df)) * 100
+cat("% null values per col: \n")
+cat(sprintf("%s: %s%%\n", names(null_values_pct), null_values_pct))
+```
+
+
+### Q1: When is the best time of day, time of week, and time of year to fly to minimise delays?
+```{r}
+# Create dictionaries to time-format statistical test results
+time_dict <- c('0000', '0100', '0200', '0300', '0400', '0500', '0600', '0700', '0800', '0900', '1000', '1100', '1200', '1300', '1400', '1500', '1600', '1700', '1800', '1900', '2000', '2100', '2200', '2300')
+week_dict <- c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
+month_dict <- c("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
+
+# Define stats functions for mean, Upper & Lower Control Limits of the R Control Chart
+x_Ucl <- function(x) mean(x) + ((max(x) - min(x)) * 3 / (3.931 * sqrt(25)))
+x_Lcl <- function(x) mean(x) - ((max(x) - min(x)) * 3 / (3.931 * sqrt(25)))
+x_test <- function(x) sum((x > x_Ucl(x)) | (x < x_Lcl(x))) / length(x)
+```
+## Best time of the day to fly with minimal delays
+
+```{r}
+# Group by 'Date' and 'DepHour', then for each group, take a random sample with replacement and calculate the mean of 'DepDelay' and 'ArrDelay' for the sampled data.
+samp_size <- 1000
+sample1 <- merged_df %>%
+  group_by(Date, DepHour) %>%
+  sample_n(samp_size, replace = TRUE) %>%
+  summarise(DepDelay = mean(DepDelay), ArrDelay = mean(ArrDelay), .groups = 'drop')
+
+# Group 'sample1' by 'DepHour' and apply the custom functions 'x_test' to the 'DepDelay' and 'ArrDelay' columns.
+sample1_time <- sample1 %>%
+  group_by(DepHour) %>%
+  summarise(DepDelay_x_test = x_test(DepDelay),
+            ArrDelay_x_test = x_test(ArrDelay)) %>%
+  mutate(Final_test = (DepDelay_x_test + ArrDelay_x_test) / 2) %>%
+  arrange(Final_test)
+
+best_dep_hour <- sample1_time$DepHour[1]
+best_dep_hour_formatted <- time_dict[best_dep_hour + 1]
+cat("The best departure time of the day with the lowest chance of delays is at", best_dep_hour_formatted, "hours\n")
+```
+# Best Time of Day visualised
+```{r}
+# Arrange the time_list data frame in ascending order based on the percentage of delays
+time_list <- time_list %>%
+  arrange(`% Delay from Upper-Lower Control Limits (Least is Best)`)
+
+# Create a bar plot using ggplot2
+ggplot(time_list, aes(x = factor(DepHour, levels = DepHour), y = `% Delay from Upper-Lower Control Limits (Least is Best)`)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Hourly Performance of Air Carriers (Delays)",
+       x = "DepHour",
+       y = "% Delay from Upper-Lower Control Limits (Least is Best)") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+## Best day of the week to fly with minimal delays
+```{r}
+# Group the 'merged_df' DataFrame by 'Date' and 'DayOfWeek', then for each group, take a random sample of size 'samp_prop' with replacement and calculate the mean of 'DepDelay' and 'ArrDelay' for the sampled data.
+sample2 <- merged_df %>%
+  group_by(Date, DayOfWeek) %>%
+  sample_n(samp_size, replace = TRUE) %>%
+  summarise(DepDelay = mean(DepDelay), ArrDelay = mean(ArrDelay), .groups = 'drop')
+
+# Group 'sample2' by 'DayOfWeek' and apply the custom functions 'x_test' to the 'DepDelay' and 'ArrDelay' columns.
+sample2_weekday <- sample2 %>%
+  group_by(DayOfWeek) %>%
+  summarise(DepDelay_x_test = x_test(DepDelay),
+            ArrDelay_x_test = x_test(ArrDelay)) %>%
+  mutate(Final_test = (DepDelay_x_test + ArrDelay_x_test) / 2) %>%
+  arrange(Final_test)
+
+# Get the best day of the week with minimal delays to depart on
+best_day_of_week <- week_dict[sample2_weekday$DayOfWeek[1]]
+cat("The best day of the week with minimal delays to depart on is", best_day_of_week, "\n")
+```
+# Best Day of Week (Visualised)
+```{r}
+# Create a data frame for the bar plot
+days_list <- data.frame(DayOfWeek = sample2_weekday$DayOfWeek,
+                        Final_test = sample2_weekday$Final_test)
+
+# Add a 'WeekDay' column with the day names
+days_list$WeekDay <- week_dict[days_list$DayOfWeek]
+
+# Rename the 'Final_test' column
+colnames(days_list)[2] <- "% Delay from Upper-Lower Control Limits (Least is Best)"
+
+# Arrange the days_list data frame in ascending order based on the percentage of delays
+days_list <- days_list %>%
+  arrange(`% Delay from Upper-Lower Control Limits (Least is Best)`)
+
+# Create a bar plot using ggplot2
+ggplot(days_list, aes(x = factor(WeekDay, levels = WeekDay), y = `% Delay from Upper-Lower Control Limits (Least is Best)`)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Daily Performance of Air Carriers (Delays)",
+       x = "WeekDay",
+       y = "% Delay from Upper-Lower Control Limits (Least is Best)") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+## Best month of the year to fly with minimal delays
+```{r}
+# Group by 'Date', then for each group, take a random sample with replacement and calculate the mean of 'DepDelay' and 'ArrDelay' for the sampled data.
+sample3 <- merged_df %>%
+  group_by(Date) %>%
+  sample_n(samp_size, replace = TRUE) %>%
+  summarise(Month = first(Month), DepDelay = mean(DepDelay), ArrDelay = mean(ArrDelay), .groups = 'drop')
+
+# Group 'sample1' by 'Month' and apply the custom functions 'x_test' to the 'DepDelay' and 'ArrDelay' columns.
+sample3_months <- sample3 %>%
+  group_by(Month) %>%
+  summarise(DepDelay_x_test = x_test(DepDelay),
+            ArrDelay_x_test = x_test(ArrDelay)) %>%
+  mutate(Final_test = (DepDelay_x_test + ArrDelay_x_test) / 2) %>%
+  arrange(Final_test)
+
+best_month <- sample3_months$Month[1]
+best_month_name <- month_dict[best_month]
+cat("In order to minimise delays, the best time of the year to depart on is", best_month_name, "\n")
+```
+## (Sorted) Best month of the year to fly (Visualised)
+```{r}
+# Create the months_list data frame
+months_list <- sample3_months %>%
+  select(Month, Final_test) %>%
+  rename(`% Delay from Upper-Lower Control Limits (Least is Best)` = Final_test) %>%
+  mutate(MonthName = month_dict[Month]) %>%
+  select(MonthName, Month, `% Delay from Upper-Lower Control Limits (Least is Best)`)
+
+# Create a bar plot using ggplot2
+ggplot(months_list, aes(x = factor(MonthName, levels = month_dict), y = `% Delay from Upper-Lower Control Limits (Least is Best)`)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Delay Performance of Air Carriers across Months",
+       x = "Month",
+       y = "% Delay from Upper-Lower Control Limits (Least is Best)") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+#### Q3: Do older planes suffer more delays?
+```{r}
+planes <- read.csv("plane-data.csv")
+```
+
+```{r}
+# Convert character types to integer for subsequent use 
+planes$year = as.integer(planes$year)
+
+# Drop the 'issue_date' column
+planes <- planes[, !names(planes) %in% c("issue_date")]
+
+# Rename 'year' column to 'AircraftYear' and 'tailnum' to 'TailNum'
+colnames(planes)[colnames(planes) == "year"] <- "AircraftYear"
+colnames(planes)[colnames(planes) == "tailnum"] <- "TailNum"
+
+# Drop missing plane details as they don't contain useful information, then reset index.
+planes <- na.omit(planes)
+planes <- data.frame(planes, row.names=NULL)
+colSums(is.na(planes))
+```
+# Merging flight records with corresponding aircraft data
+```{r}
+# Create a new dataframe from the main dataframe containing essential columns.
+flights_planes <- merged_df[, c("Year", "TailNum", "DepDelay", "ArrDelay")]
+
+# Merge both data frames with common column 'TailNum'
+flights_planes <- left_join(flights_planes, planes, by = "TailNum")
+# Remove rows with NA values and reset row indices
+flights_planes <- na.omit(flights_planes)
+flights_planes <- data.frame(flights_planes, row.names = NULL)
+
+# Check for remaining null values
+colSums(is.na(flights_planes))
+
+```
+# Explore spread of aircraft ages via a defined formula formula Aircraft Age = Year of flight - Issue Year
+```{r}
+# Create new column 'Age' to store calculated age of aircraft
+flights_planes <- flights_planes %>%
+  mutate(Age = Year - AircraftYear)
+# Check the length of each variable vector in merged_df
+sapply(flights_planes, length)
+```
+# Remove negative & erroneously large plane ages
+```{r}
+flights_planes <- flights_planes[flights_planes$Age > 0 & flights_planes$Age < 200,]
+flights_planes <- data.frame(flights_planes, row.names = NULL)
+# Re-check range of plane ages
+cat("Range of Aircraft Ages: \n", sort(unique(flights_planes$Age)), "\n")
+```
+# Visualize proportion of flight delays by aircraft ages
+```{r}
+# Create a delay column where flights have departure delays given that they had arrival delays
+flights_planes$Delayed <- ifelse((flights_planes$DepDelay != 0) | (flights_planes$ArrDelay != 0), 1, 0)
+
+ggplot(flights_planes, aes(x = Age, fill = as.factor(Delayed))) +
+  geom_bar(position = "dodge") +
+  labs(fill = "Delayed")
+```
+## Hypothesis Testing
+We will apply the Chi-Square test to the claim 'Do older planes suffer more delays?' 
+H0: Older planes suffer more delays. 
+H1: Older planes do not suffer more delays.
+```{r}
+# Calculate Chi-Square
+age_delayed <- flights_planes %>% 
+  group_by(Age) %>%
+  summarise(Delayed_Sum = sum(Delayed))
+
+chi_result <- chisq.test(age_delayed$Delayed_Sum)
+
+# Test the null hypothesis
+if (chi_result$p.value < 0.05) {
+  cat("P value", format(chi_result$p.value, scientific = FALSE), "\n")
+  cat("There is sufficient evidence to reject null hypothesis.\n")
+} else {
+  cat("P value", format(chi_result$p.value, scientific = FALSE), "\n")
+  cat("There is insufficient evidence to reject null hypothesis.\n")
+}
+```
+
+### Q3 How does the number of people flying between different locations change over time?
+```{r}
+airports <- read.csv("airports.csv")
+# Rename columns
+colnames(airports)[colnames(airports) == "iata"] <- "IATA"
+colnames(airports)[colnames(airports) == "lat"] <- "latitude"
+colnames(airports)[colnames(airports) == "long"] <- "longitude"
+
+colSums(is.na(airports))
+airports <- na.omit(airports)
+```
+# Comparing monthly flight volumes between the years
+```{r}
+ggplot(merged_df, aes(x = as.factor(Month), fill = as.factor(Year))) +
+  geom_bar(position = "dodge") +
+  labs(fill = "Year") +
+  xlab("Month") +
+  scale_fill_manual(values = c("red", "blue", "green", "purple", "orange", "brown"))
+```
+# Comparing yearly total airtime
+```{r}
+ggplot(merged_df, aes(x = AirTime, fill = as.factor(Year))) +
+  geom_histogram(position = "identity", alpha = 0.6, bins = 500) +
+  labs(fill = "Year") +
+  xlim(0, 500) +
+  scale_fill_manual(values = c("red", "blue", "green", "purple", "orange", "brown"))
+```
+# Comparing yearly total flight distance
+```{r}
+ggplot(merged_df, aes(x = Distance, fill = as.factor(Year))) +
+  geom_histogram(position = "identity", alpha = 0.5, bins = 500) +
+  labs(fill = "Year") +
+  scale_fill_manual(values = c("red", "blue", "green", "purple", "orange", "brown"))
+```
+
+## Visualising flight volume across locations over time
+```{r}
+# Create a new dataframe with flight counts per route and year
+date_orig_dest <- merged_df[, c("Year", "Origin", "Dest", "Distance")]
+date_orig_dest$Route <- paste(date_orig_dest$Origin, date_orig_dest$Dest, sep = "-")
+date_orig_dest <- data.frame(table(date_orig_dest$Year, date_orig_dest$Route))
+names(date_orig_dest) <- c("Year", "Route", "Count")
+date_orig_dest
+
+# Filter for top 5 routes across all years
+N <- 5
+top_routes <- date_orig_dest %>%
+  group_by(Route) %>%
+  summarise(TotalCount = sum(Count)) %>%
+  top_n(N, TotalCount)
+
+top_routes
+# Filter the date_orig_dest for the top N routes
+top_routes_data <- date_orig_dest %>%
+  filter(Route %in% top_routes$Route)
+# Plot line graphs for top N routes across the years
+ggplot(top_routes_data, aes(x = as.factor(Year), y = Count, group = Route, color = Route)) +
+  geom_line() +
+  geom_point() +
+  labs(x = "Year", y = "Flight Count", color = "Route") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  ggtitle(paste("Top", N, "Routes Over Time"))
+```
+
+```{r}
+# 1. Prepare the airport coordinates and total routes data.
+airport_coord <- airports %>% select(IATA, latitude, longitude)
+total_routes <- merged_df %>% group_by(Origin, Dest) %>% summarise(Count = n())
+
+# 2. Sort by unique routes and their count and reset index.
+total_routes <- total_routes %>% arrange(desc(Count)) %>% mutate(Route = paste0(Origin, "-", Dest))
+
+# 3. Merge the airport coordinates with the total routes data.
+total_routes_data <- total_routes %>% left_join(airport_coord, by = c("Origin" = "IATA")) %>%
+  left_join(airport_coord, by = c("Dest" = "IATA"), suffix = c("_Origin", "_Dest"))
+
+# 4. Normalize the count values.
+total_routes_data$norm_count <- (total_routes_data$Count - min(total_routes_data$Count)) / (max(total_routes_data$Count) - min(total_routes_data$Count))
+
+# 5. Create a leaflet map and add lines for each route.
+route_map <- leaflet() %>% addTiles() %>% setView(lng = -105.7129, lat = 38.0902, zoom = 3.5)
+
+for (i in 1:nrow(total_routes_data)) {
+  route_map <- addPolylines(route_map,
+                            lng = c(total_routes_data$longitude_Origin[i], total_routes_data$longitude_Dest[i]),
+                            lat = c(total_routes_data$latitude_Origin[i], total_routes_data$latitude_Dest[i]),
+                            weight = total_routes_data$norm_count[i] * 3,
+                            color = "purple",
+                            opacity = 0.1)
+}
+
+route_map
+```
+
+### Q4: Can you detect cascading failures as delays in one airport create delays in others?
+```{r}
+# 1. Aggregate all delay-types together into an overall 'SumOfDelays'
+merged_df <- merged_df %>%
+  mutate(SumOfDelays = DepDelay + CarrierDelay + WeatherDelay + NASDelay + SecurityDelay + LateAircraftDelay)
+
+# 2. Largest sum of delays duration for a flight
+longest_delay <- max(merged_df$SumOfDelays)
+cat(paste("The largest sum of delays on a single flight is", longest_delay, "minutes (", longest_delay/60, "hrs)."))
+```
+
+```{r}
+# 3. Retrieve the top 5 flights with the greatest sum of delays
+delay_format <- c("Date", "Origin", "Dest", "SumOfDelays")
+largest_delays_df <- merged_df %>%
+  select(all_of(delay_format)) %>%
+  top_n(5, SumOfDelays) %>%
+  arrange(desc(SumOfDelays)) %>%
+  mutate(Index = row_number()) %>%
+  select(Index, everything())
+
+largest_delays_df
+```
+
+# Sizing up flight delays and selecting airport of focus
+```{r}
+# 4. Count delayed flights grouped by their destination airport and find the airport with the highest number of incoming delayed flights
+delayed_destinations <- merged_df %>% filter(SumOfDelays > 0) %>% count(Dest) %>% arrange(desc(n))
+most_delayed_dest_airport <- delayed_destinations$Dest[1]
+largest_count_dest <- delayed_destinations$n[1]
+
+cat(paste("The airport with the highest number of incoming flight delays is", most_delayed_dest_airport, "(", largest_count_dest, "delays)\n"))
+```
+Hartsfield-Jackson Atlanta International Airport was the destination airport that received the most delayed flights during this time period, possibly propagating the delay effects onto subsequent locations.
+```{r}
+# 5. Count delayed flights grouped by their origin airport and find the airport with the highest number of outgoing delayed flights
+delayed_origins <- merged_df %>% filter(SumOfDelays > 0) %>% count(Origin) %>% arrange(desc(n))
+most_delayed_orig_airport <- delayed_origins$Origin[1]
+largest_count_orig <- delayed_origins$n[1]
+
+cat(paste("The airport with the highest number of outgoing flight delays is", most_delayed_orig_airport, "(", largest_count_orig, "delays)."))
+```
+Interestingly, Hartsfield-Jackson Atlanta International Airport also has the highest number of outgoing delays. Since it faces the most incoming delays, there is a possibility that there is a delay spillover from delayed inbound flights which is cascading onto downstream locations.
+
+# Calculate the delay ratio
+```{r}
+# Calculate the delay ratio for a given origin and date
+calculate_origin_delay_ratio <- function(origin, date, merged_df) {
+  unique_origin <- merged_df[(merged_df$Origin == origin) & (merged_df$Date == date),]
+  delay_count <- nrow(unique_origin[unique_origin$SumOfDelays > 0,])
+  flight_count <- nrow(unique_origin)
+  delay_ratio <- delay_count / flight_count
+  return(list(Origin = origin, Date = date, DelayRatio = delay_ratio, FlightCount = flight_count))
+}
+
+# Calculate delay ratios for top 3 origin airports
+top_origins <- head(sort(table(merged_df$Origin), decreasing = TRUE), 3)
+dates <- unique(merged_df$Date)
+
+delay_ratios <- lapply(names(top_origins), function(origin) {
+  lapply(dates, function(date) {
+    calculate_origin_delay_ratio(origin, date, merged_df)
+  })
+})
+
+delay_ratios_df <- do.call(rbind.data.frame, unlist(delay_ratios, recursive = FALSE))
+
+# Calculate moving average of delay ratios
+window <- 7
+delay_ratios_df$MovingAverage <- ave(delay_ratios_df$DelayRatio, delay_ratios_df$Origin, FUN = function(x) {
+  stats::filter(x, rep(1/window, window), sides = 2)
+})
+
+# Function to create a separate plot for each airport
+create_delay_ratio_plot <- function(airport_data) {
+  ggplot(airport_data, aes(x = Date, y = MovingAverage)) +
+    geom_point(aes(color = Origin), alpha = 0.5) +
+    labs(title = paste0("Airport ", airport_data$Origin[1], " Delay Ratio (Moving Average)"),
+         x = "Date", y = "Delay Ratio") +
+    theme_minimal() +
+    theme(legend.position = "none")
+}
+
+# Create a list of plots for each airport
+plots <- lapply(unique(delay_ratios_df$Origin), function(origin) {
+  airport_data <- delay_ratios_df[delay_ratios_df$Origin == origin,]
+  create_delay_ratio_plot(airport_data)
+})
+
+# Print the plots for each airport
+for (plot in plots) {
+  print(plot)
+}
+
+```
+# Visualise airport networks and their delays
+```{r}
+# 1. Create an airport network
+edges <- merged_df %>%
+  group_by(Origin, Dest) %>%
+  summarize(
+    NumFlights = n(),
+    AvgDelay = mean(SumOfDelays, na.rm = TRUE),
+    PropDelayedFlights = mean(SumOfDelays > 0, na.rm = TRUE)
+  )
+
+airport_network <- graph_from_data_frame(edges, directed = TRUE)
+
+# 2. Identify ATL's highest volume neighbors
+atl_neighbors <- edges %>%
+  filter(Origin == "ATL") %>%
+  arrange(desc(NumFlights)) %>%
+  head(5)
+
+# 3. Analyze cascading delays
+atl_cascading_delays <- lapply(atl_neighbors$Dest, function(dest) {
+  delay_ratios_atl <- lapply(dates, function(date) {
+    calculate_origin_delay_ratio("ATL", date, merged_df)
+  })
+  delay_ratios_dest <- lapply(dates, function(date) {
+    calculate_origin_delay_ratio(dest, date, merged_df)
+  })
+  
+  cascading_delays <- data.frame(
+    Date = dates,
+    ATL_DelayRatio = unlist(lapply(delay_ratios_atl, function(x) if ("DelayRatio" %in% names(x)) x$DelayRatio else NA)),
+    Dest_DelayRatio = unlist(lapply(delay_ratios_dest, function(x) if ("DelayRatio" %in% names(x)) x$DelayRatio else NA))
+  )
+  
+  # Calculate correlation between ATL's delay ratio and the destination's delay ratio
+  correlation <- cor(cascading_delays$ATL_DelayRatio, cascading_delays$Dest_DelayRatio, use = "pairwise.complete.obs")
+  
+  return(list(Destination = dest, Correlation = correlation))
+})
+
+atl_cascading_delays_df <- do.call(rbind.data.frame, unlist(atl_cascading_delays, recursive = FALSE))
+
+# Step 4: Visualize the network
+atl_subgraph <- induced_subgraph(airport_network, c("ATL", atl_neighbors$Dest))
+E(atl_subgraph)$width <- E(atl_subgraph)$NumFlights / max(E(atl_subgraph)$NumFlights) * 5
+
+plot(atl_subgraph,
+     vertex.color = "lightblue",
+     vertex.size = 30,
+     vertex.label.cex = 0.8,
+     edge.arrow.size = 0.5,
+     layout = layout_nicely)
+
+```
+### Q5: Use the available variables to construct a model that predicts flight delays
+
+# Correlation Matrix for high level overview of variable relationships
+``` {r}
+# Separate numeric-only columns for the matrix
+numeric_columns <- sapply(merged_df, is.numeric)
+numeric_df <- merged_df[, numeric_columns]
+# Calculate correlation matrix
+corr_matrix <- cor(numeric_df, use = "complete.obs")
+corr_matrix_heatmap <- ggplot(melt(corr_matrix), aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_gradient2()
+
+print(corr_matrix_heatmap)
+```
+
+```{r}
+# Sampling 20,000 rows from the dataset
+segment <- merged_df %>% sample_n(100, replace = FALSE, seed = 13)
+
+# Define categorical and numerical columns
+categorical_columns <- c("Origin", "Dest", "Month", "DayOfWeek", "DepHour", "TailNum")
+numerical_columns <- c("Distance", "CarrierDelay", "WeatherDelay", "NASDelay", "SecurityDelay", "LateAircraftDelay")
+
+# Split data into features and target variable
+X <- segment %>% select(all_of(c(categorical_columns, numerical_columns)))
+y <- segment %>% select(ArrDelay)
+
+# Split data into training, testing, and validation sets
+data_split <- initial_split(y, prop = 0.7, strata = ArrDelay)
+train_data <- training(data_split)
+test_val_data <- testing(data_split)
+
+test_val_split <- initial_split(test_val_data, prop = 0.5, strata = ArrDelay)
+test_data <- training(test_val_split)
+val_data <- testing(test_val_split)
+
+# Create a recipe to preprocess the data
+recipe <- recipe(ArrDelay ~ ., data = train_data) %>%
+  step_normalize(all_numeric(), -all_outcomes()) %>%
+  step_dummy(all_nominal(), -all_outcomes())
+
+# Create a model specification
+svr_spec <- svm_rbf(cost = tune(), epsilon = tune()) %>%
+  set_engine("kernlab") %>%
+  set_mode("regression")
+
+# Perform cross-validation
+cv_folds <- vfold_cv(train_data, v = 5, strata = ArrDelay)
+cv_results <- fit_resamples(svr_spec, recipe, cv_folds)
+
+# Hyperparameter tuning
+tune_grid <- grid_regular(cost(range = c(0.1, 10), levels = 3),
+                          epsilon(range = c(0.1, 10), levels = 3))
+
+tune_results <- tune_grid(svr_spec, recipe, resamples = cv_folds, grid = tune_grid)
+
+# Get the best hyperparameters
+best_params <- select_best(tune_results, "mae")
+
+# Train the model with the best hyperparameters
+best_svr_spec <- svm_rbf(cost = best_params$cost, epsilon = best_params$epsilon) %>%
+  set_engine("kernlab") %>%
+  set_mode("regression")
+
+svr_workflow <- workflow() %>%
+  add_recipe(recipe) %>%
+  add_model(best_svr_spec)
+
+svr_fit <- svr_workflow %>% fit(train_data)
+
+# Evaluate the model on the test set
+test_results <- svr_fit %>% predict(test_data) %>%
+  bind_cols(test_data %>% select(ArrDelay)) %>%
+  metrics(truth = ArrDelay, estimate = .pred)
+
+# Evaluate the model on the validation set
+val_results <- svr_fit %>% predict(val_data) %>%
+  bind_cols(val_data %>% select(ArrDelay)) %>%
+  metrics(truth = ArrDelay, estimate = .pred)
+
+cat("Test set evaluation:\n")
+cat("Mean Absolute Error:", test_results %>% filter(.metric == "mae") %>% pull(.estimate), "\n")
+cat("Mean Squared Error:", test_results %>% filter(.metric == "rmse") %>% pull(.estimate)^2, "\n")
+cat("R-squared:", test_results %>% filter(.metric == "rsq") %>% pull(.estimate), "\n")
+
+cat("\nValidation set evaluation:\n")
+cat("Mean Absolute Error:", val_results %>% filter(.metric == "mae") %>% pull(.estimate), "\n")
+cat("Mean Squared Error:", val_results %>% filter(.metric == "rmse") %>% pull(.estimate)^2, "\n")
+cat("R-squared:", val_results %>% filter(.metric == "rsq") %>% pull(.estimate), "\n")
+
+
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
