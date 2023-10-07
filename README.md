@@ -9,9 +9,9 @@ This repository contains the code and resources for a comprehensive flight delay
 We'll be using three years (2006-2007) of US domestic flight data was sourced from the ASA Statistical Computing Data Expo 2009: Airline on time data (https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/HG7NV7)
 
 ### Key Features & Project Structure
-**Data Exploration**: The project begins with thorough data exploration and analysis, examining historical flight data to identify period patterns and trends in flight delay performance, route frequency weightage, and more.
+**Data Exploration**: We begin by examining historical flight data to identify period patterns and trends in flight delay performance, route frequency weightage, and more.
 
-**Cascading Delay Analysis**: Building upon the EDA, the project investigated the concept of cascading delays, where delays at one airport can impact subsequent flights. This analysis helped understand the ripple effects of delays in the aviation network.
+**Cascading Delay Analysis**: Building upon the EDA, the project investigates the concept of cascading delays, where delays at one airport can impact subsequent flights with ripple effects on the aviation network. 
 
 **Predictive Modeling**: The core of the project involved building a predictive model for flight delays. The Support Vector Regression (SVR) model was selected based on evaluations of academic literature on its performance and suitability for applied delay prediction.
 
@@ -21,7 +21,7 @@ We'll be using three years (2006-2007) of US domestic flight data was sourced fr
 
 **Cross-Validation**: Cross-validation was used to prevent overfitting and ensure the model generalized well to unseen data.
 
-**--Getting Started--**
+**------------------------------Getting Started------------------------------**
 To get started with this project, follow these steps:
 
 **Clone the Repository**: Begin by cloning this Git repository to your local machine.
