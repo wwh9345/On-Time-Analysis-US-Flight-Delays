@@ -1,10 +1,10 @@
 # On Time Analysis of US Flight Delays
 
 ### Overview
-This repository contains the code and resources for a comprehensive flight delay prediction project. Predicting flight delays accurately is a crucial task in the aviation industry, with implications for operational efficiency, customer satisfaction, cost savings, and gaining a competitive edge. This README provides an overview of the project, its key components, and how to use the provided code and notebooks.
+This repository contains the code and resources for a comprehensive flight delay prediction project. Predicting flight delays accurately is a crucial task in the aviation industry, with implications for operational efficiency, customer satisfaction, cost savings, and gaining a competitive edge.
 
 ### Data Source
-Three years (2006-2007) of US domestic flight data was sourced from the ASA Statistical Computing Data Expo 2009: Airline on time data (https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/HG7NV7)
+We'll be using three years (2006-2007) of US domestic flight data was sourced from the ASA Statistical Computing Data Expo 2009: Airline on time data (https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/HG7NV7)
 
 ### Key Features & Project Structure
 **Data Exploration**: The project begins with thorough data exploration and analysis, examining historical flight data to identify period patterns and trends in flight delay performance, route frequency weightage, and more.
@@ -25,10 +25,10 @@ To get started with this project, follow these steps:
 
 **Clone the Repository**: Begin by cloning this Git repository to your local machine.
 
-type 'git clone https://github.com/your-username/On-Time-Analysis-US-Flight-Delays.git'
+type 'git clone https://github.com/wwh9345/On-Time-Analysis-US-Flight-Delays.git'
 
 **Install Dependencies**: Make sure you have Python and the required libraries installed. You can use the provided requirements.txt file to set up the necessary environment.
-typw 'pip install -r requirements.txt'
+type 'pip install -r requirements.txt'
 
 **Explore the Notebooks**: Dive into the Jupyter notebooks provided in the respective project sections. These notebooks contain detailed code, explanations, and visualizations for each step of the project.
 
